@@ -200,7 +200,6 @@ History for 'tank':
 2026-10-27.00:00:01 zfs snapshot tank/home@daily-2026-10-27
 """
 
-IOSTAT = "rpool\t102341234567\t894091178105\t0\t12\t0\t104857\ntank\t9001\t6993\t5\t7\t1048576\t2097152\n"
 
 ARCSTATS = """\
 13 1 0x01 123 33456 1234 5678

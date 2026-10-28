@@ -73,7 +73,8 @@ class Walk(unittest.TestCase):
         text = self.start()
         self.assertIn("zman  ZFS on this host", text)
         self.assertIn("2 degraded", text)
-        self.assertIn("8  System info", text)
+        self.assertIn("7  System info", text)
+        self.assertNotIn("Live I/O", text)
         self.assertIn("Unknown key: x", self.go("x"))
         self.assertIn("Unknown key: 42", self.go("42"))
         text = self.go("m")                       # m on the main menu does nothing
@@ -512,7 +513,7 @@ class Walk(unittest.TestCase):
 
     def test_prune_snapshots(self) -> None:
         self.start()
-        text = self.go("7")
+        text = self.go("6")
         self.assertIn("Prune snapshots (5 can be pruned)", text)
         text = self.go("1")
         self.assertNotIn("manual-2026-10-01", text)       # held
@@ -523,15 +524,6 @@ class Walk(unittest.TestCase):
         text = self.go("2")
         self.assertIn("Removed 2 snapshots", text)
         self.assertIn("3 can be pruned", text)
-
-    def test_live_io_auto_refresh(self) -> None:
-        self.start()
-        text = self.go("6")
-        self.assertIn("READ OPS", text)
-        self.t.key("a", quiet=1.5, wait_prompt=False)
-        self.assertIn("Ctrl-C stops", self.snap("auto"))
-        text = self.go("^C")
-        self.assertIn("a auto-refresh", text)
 
     def test_config_warning_shown(self) -> None:
         os.makedirs(os.path.join(self.root, "m"), exist_ok=True)
@@ -552,7 +544,7 @@ class Walk(unittest.TestCase):
                 self.start(cols, rows)
                 for path in (["1"], ["1", "2"], ["1", "2", "1"], ["1", "2", "1", "3"], ["1", "2", "16"],
                              ["2"], ["2", "5"], ["2", "5", "6"], ["3"], ["3", "1"], ["4"], ["4", "1"],
-                             ["5"], ["5", "4"], ["6"], ["7"], ["7", "2"], ["8"]):
+                             ["5"], ["5", "4"], ["6"], ["6", "2"], ["7"]):
                     text = self.go(*path)
                     for line in text.splitlines():
                         self.assertLessEqual(len(line), cols)

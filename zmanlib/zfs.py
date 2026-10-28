@@ -178,11 +178,6 @@ def import_candidates(runner: Runner = run, search_dir: str = "") -> Tuple[List[
     return [], r.reason
 
 
-def iostat(runner: Runner = run) -> Tuple[List[M.IoStat], str]:
-    r = runner(["zpool", "iostat", "-H", "-p", "-y", "1", "1"])
-    return M.parse_iostat(r.out), ("" if r.ok else r.reason)
-
-
 def read_file(path: str) -> str:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:

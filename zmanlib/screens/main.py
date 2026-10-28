@@ -41,15 +41,15 @@ def summary(width: int) -> str:
 def main_menu() -> None:
     from .datasets import datasets_screen, volumes_screen
     from .disks import disks_screen
-    from .info import live_io_screen, system_info
+    from .info import system_info
     from .pools import pools_screen
     from .snapshots import snapshots_screen
     from .space import space_screen
 
     targets = {"1": pools_screen, "2": datasets_screen, "3": snapshots_screen, "4": volumes_screen,
-               "5": disks_screen, "6": live_io_screen, "7": space_screen, "8": system_info}
+               "5": disks_screen, "6": space_screen, "7": system_info}
     opts = [Opt("1", "Pools"), Opt("2", "Datasets"), Opt("3", "Snapshots"), Opt("4", "Volumes"),
-            Opt("5", "Disks"), Opt("6", "Live I/O"), Opt("7", "Space & cleanup"), Opt("8", "System info"),
+            Opt("5", "Disks"), Opt("6", "Space & cleanup"), Opt("7", "System info"),
             Opt("h", "Help")]
     msg = Msg()
     while True:

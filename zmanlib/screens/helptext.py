@@ -118,16 +118,6 @@ Columns
            even when sdX names change at boot.
 """
 
-IOSTAT = LIST_KEYS + """\
-  a        auto-refresh: redraw every few seconds until Ctrl-C
-
-Each refresh measures for one second.
-Columns
-  READ OPS / WRITE OPS   operations per second.
-  READ / WRITE           bytes per second.
-  ALLOC / FREE           space used and free.
-"""
-
 SPACE = LIST_KEYS + """\
 Rows are datasets and volumes, largest first.
 Columns

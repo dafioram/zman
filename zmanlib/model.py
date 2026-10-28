@@ -1038,7 +1038,7 @@ def create_args(name: str, key: str, devs: Sequence[str], sizes: Sequence[int], 
     return args
 
 
-# ---------------------------------------------------------------- import, iostat, arc, history
+# ---------------------------------------------------------------- import, arc, history
 
 
 @dataclass
@@ -1086,27 +1086,6 @@ def parse_import(text: str) -> List[ImportCandidate]:
         elif key in ("status", "action"):
             setattr(cur, key, (getattr(cur, key) + " " + strip_ctl(line).strip()).strip())
     return [c for c in out if c.name and c.id]
-
-
-@dataclass
-class IoStat:
-    pool: str
-    alloc: Optional[int]
-    free: Optional[int]
-    rops: Optional[int]
-    wops: Optional[int]
-    rbw: Optional[int]
-    wbw: Optional[int]
-
-
-def parse_iostat(text: str) -> List[IoStat]:
-    out = []
-    for line in text.splitlines():
-        f = line.split("\t")
-        if len(f) < 7 or not f[0].strip():
-            continue
-        out.append(IoStat(strip_ctl(f[0]).strip(), *(to_int(x) for x in f[1:7])))
-    return out
 
 
 def parse_arcstats(text: str) -> Dict[str, int]:

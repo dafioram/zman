@@ -1132,12 +1132,6 @@ def zpool_cmd(argv):
         for ev in s["pools"][rest[0]].get("events", []) if rest else []:
             print(ev)
         return
-    if cmd == "iostat":
-        for n in sorted(pools):
-            p = pools[n]
-            alloc = pool_alloc(s, n)
-            print(f"{n}\t{alloc}\t{p['size'] - alloc}\t12\t34\t1048576\t2097152")
-        return
     if cmd == "upgrade":
         p = need_pool(args[-1])
         for k in list(p["props"]):

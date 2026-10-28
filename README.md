@@ -8,11 +8,10 @@ long or destructive, and asks before it changes anything.
 ```
 zman  ZFS on this host - 2 pools, 11 datasets, 1 volume, 1 degraded
 
-1  Pools             6  Live I/O
-2  Datasets          7  Space & cleanup
-3  Snapshots         8  System info
+1  Pools             5  Disks
+2  Datasets          6  Space & cleanup
+3  Snapshots         7  System info
 4  Volumes           h  Help
-5  Disks
 b back · q quit
 >
 ```
@@ -47,6 +46,11 @@ zman
 | `/usr/local/bin/zman` | the launcher |
 | `/usr/local/lib/zman/` | the program, `VERSION` and an install marker |
 | `/etc/zman/zman.conf` | config, written only if it does not exist |
+
+If `./install.sh` says `Permission denied`, the files lost their executable bit
+(this happens when a zip is unpacked or committed by some tools). Run
+`sudo sh install.sh` instead, and restore the bit in git so CI's check passes:
+`git update-index --chmod=+x install.sh uninstall.sh zman.py`.
 
 Reinstalling (for example after `git pull`) replaces the program in place and keeps
 the config. The installed copy does not depend on the folder you installed from.
@@ -127,16 +131,13 @@ how to get single files back.
 **Disks.** Every disk with size, how it is used, type, serial, model and by-id
 name, with its partitions in the disk's view.
 
-**Live I/O.** Per-pool operations and bandwidth from `zpool iostat`, with ARC
-statistics and auto-refresh.
-
 **Space & cleanup.** Space per pool split into data, snapshots and reservations,
 the datasets whose snapshots hold the most, space by dataset, and **Prune
 snapshots**.
 
 **System info.** zman and ZFS versions (including a warning when the tools and
-the kernel module differ), the scheduled scrub job Debian ships, and whether an
-automatic snapshot tool is installed.
+the kernel module differ), ARC cache size and hit rate, the scheduled scrub job
+Debian ships, and whether an automatic snapshot tool is installed.
 
 ## Safety
 
@@ -165,6 +166,7 @@ Every change goes preview → confirm → re-check → run:
   checkpoints and RAIDZ expansion. Use the ZFS tools directly for these.
 - Pools striped across several disks without redundancy.
 - Blinking a drive's LED: zman shows the serial number instead.
+- Live I/O monitoring: use `zpool iostat -v -l` or `iostat`.
 
 ## Configuration
 

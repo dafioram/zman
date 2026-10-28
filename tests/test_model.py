@@ -193,14 +193,12 @@ class OtherParsers(unittest.TestCase):
         self.assertIn("'-f' flag.", c[0].action)
         self.assertTrue(any("mirror-0" in line for line in c[0].config))
 
-    def test_history_events_iostat_arc(self) -> None:
+    def test_history_events_arc(self) -> None:
         h = M.parse_history(F.HISTORY)
         self.assertEqual(len(h), 3)
         self.assertEqual(h[0][0].year, 2026)
         self.assertIsNotNone(M.parse_event_time("Oct 27 2026 14:22:01.123456789 ereport.fs.zfs.io"))
         self.assertIsNone(M.parse_event_time("TIME CLASS"))
-        io = M.parse_iostat(F.IOSTAT)
-        self.assertEqual(io[1].rbw, 1048576)
         arc = M.parse_arcstats(F.ARCSTATS)
         self.assertEqual(arc["hits"], 9700)
 

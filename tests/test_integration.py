@@ -162,14 +162,11 @@ class RealZfs(unittest.TestCase):
         r = sh("zfs", "diff", "-F", f"{self.pool}/a@s1")
         self.assertIn("file2.txt", r.out)
 
-    def test_07_history_iostat_events(self) -> None:
+    def test_07_history_events(self) -> None:
         r = sh("zpool", "history", self.pool)
         hist = M.parse_history(r.out)
         self.assertTrue(any("zpool create" in line for _, line in hist))
         self.assertTrue(all(ts is not None for ts, _ in hist))
-        stats, err = Z.iostat()
-        self.assertEqual(err, "")
-        self.assertIn(self.pool, [s.pool for s in stats])
         r = R.run(["zpool", "events", self.pool])
         self.assertEqual(r.rc, 0, r.err)
 
