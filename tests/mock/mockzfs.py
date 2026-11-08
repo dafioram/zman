@@ -528,6 +528,11 @@ def zfs_cmd(argv):
         flags, opts, rest = opt_parse(args, ("-t", "-o", "-s", "-d", "-S"))
         types = ",".join(opts.get("-t", ["filesystem,volume"])).split(",")
         props = opts.get("-o", ["name,used,available,referenced,mountpoint"])[0].split(",")
+        if types == ["bookmark"]:
+            for name, bookmark in s.get("bookmarks", {}).items():
+                if not rest or name.split("#", 1)[0] == rest[0]:
+                    print("\t".join(str(bookmark[prop]) if prop != "name" else name for prop in props))
+            return
         names = []
         if rest:
             target = rest[0]
@@ -746,10 +751,14 @@ def zfs_cmd(argv):
         ds = snap.split("@")[0]
         txg = s["snapshots"][snap]["txg"]
         newer = [n for n in snaps_of(s, ds) if s["snapshots"][n]["txg"] > txg]
-        if newer and "-r" not in flags:
+        bookmarks = s.get("bookmarks", {})
+        newer_bookmarks = [name for name, b in bookmarks.items() if name.split("#", 1)[0] == ds and b["createtxg"] > txg]
+        if (newer or newer_bookmarks) and "-r" not in flags:
             die(f"cannot rollback to '{snap}': more recent snapshots or bookmarks exist\nuse '-r' to force deletion")
         for n in newer:
             del s["snapshots"][n]
+        for n in newer_bookmarks:
+            del bookmarks[n]
         save(s)
         return
     if cmd in ("hold", "release"):
@@ -1169,13 +1178,13 @@ def lsblk_cmd(argv):
         node = {"name": d["name"], "kname": d["name"], "path": f"/dev/{d['name']}", "size": d["size"],
                 "type": "disk", "model": d.get("model"), "serial": d.get("serial"), "rota": d.get("rota", True),
                 "tran": d.get("tran", "sata"), "fstype": d.get("fstype") or None, "label": d.get("label") or None,
-                "mountpoint": d.get("mountpoint")}
+                "mountpoint": d.get("mountpoint"), "log-sec": d.get("logical_sector", 512)}
         kids = []
         for pt in d.get("parts", []):
             k = {"name": pt["name"], "kname": pt["name"], "path": f"/dev/{pt['name']}", "size": pt["size"],
                  "type": "part", "model": None, "serial": None, "rota": d.get("rota", True), "tran": None,
                  "fstype": pt.get("fstype") or None, "label": pt.get("label") or None,
-                 "mountpoint": pt.get("mountpoint")}
+                 "mountpoint": pt.get("mountpoint"), "parttype": pt.get("parttype")}
             if pt.get("holder"):
                 k["children"] = [{"name": pt["holder"], "kname": "dm-0", "type": "crypt", "size": pt["size"],
                                   "mountpoint": "/home"}]
@@ -1196,17 +1205,25 @@ def sfdisk_cmd(argv):
         die(f"sfdisk: cannot open {path}: No such file or directory")
     script = sys.stdin.read()
     size = None
+    sector = d.get("logical_sector", 512)
+    start = 0
+    parttype = ""
     for part in script.replace("\n", ",").split(","):
         part = part.strip()
         if part.startswith("size="):
-            size = int(part.split("=", 1)[1]) * 512
-    if size is None or size > d["size"]:
+            size = int(part.split("=", 1)[1]) * sector
+        elif part.startswith("start="):
+            start = int(part.split("=", 1)[1]) * sector
+        elif part.startswith("type="):
+            parttype = part.split("=", 1)[1]
+    if not size or start + size > d["size"]:
         die("sfdisk: failed to add #1 partition: Numerical result out of range")
     d["parts"] = []
     d["fstype"] = ""
     make_part(s, d, 1, size)
+    d["parts"][0]["parttype"] = parttype
     save(s)
-    print(f"Created a new GPT disklabel.\n{d['name']}1 : start= 2048, size= {size // 512}")
+    print(f"Created a new GPT disklabel.\n{d['name']}1 : start= {start // sector}, size= {size // sector}")
 
 
 def main():

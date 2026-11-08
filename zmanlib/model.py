@@ -712,6 +712,9 @@ class Part:
     mounts: List[str] = field(default_factory=list)
     holders: List[str] = field(default_factory=list)   # crypt, lvm, raid1...
     by_id: str = ""
+    uuid: str = ""
+    parttype: str = ""
+    partuuid: str = ""
 
     @property
     def number(self) -> int:
@@ -735,6 +738,7 @@ class Disk:
     parts: List[Part] = field(default_factory=list)
     by_id: str = ""
     raw: Dict[str, object] = field(default_factory=dict)
+    logical_sector: int = 0
 
     @property
     def media(self) -> str:
@@ -822,6 +826,7 @@ def parse_lsblk(text: str) -> Tuple[List[Disk], str]:
             tran=strip_ctl(d.get("tran") or ""), rota=_as_bool(d.get("rota")),
             fstype=strip_ctl(d.get("fstype") or ""), label=strip_ctl(d.get("label") or ""),
             mounts=_mounts_of(d), raw=d,
+            logical_sector=to_int(d.get("log-sec")) or 0,
         )
         for ch in d.get("children") or []:
             if not isinstance(ch, dict):
@@ -834,6 +839,8 @@ def parse_lsblk(text: str) -> Tuple[List[Disk], str]:
                     size=to_int(ch.get("size")) or 0, fstype=strip_ctl(ch.get("fstype") or ""),
                     label=strip_ctl(ch.get("label") or ""), mounts=_mounts_of(ch) + mounts,
                     holders=types,
+                    uuid=str(ch.get("uuid") or ""), parttype=str(ch.get("parttype") or ""),
+                    partuuid=str(ch.get("partuuid") or ""),
                 ))
             else:
                 disk.holders.append(str(ch.get("type") or "?"))
@@ -941,9 +948,10 @@ def headroom_size(sizes: Sequence[int]) -> int:
     return max(0, size - size % MIB)
 
 
-def sfdisk_script(size_bytes: int, label: str) -> str:
-    sectors = size_bytes // 512
-    return f"label: gpt\nstart=2048, size={sectors}, type={ZFS_PART_TYPE}, name=\"{label}\"\n"
+def sfdisk_script(size_bytes: int, label: str, logical_sector: int) -> str:
+    start = MIB // logical_sector
+    sectors = size_bytes // logical_sector
+    return f"label: gpt\nstart={start}, size={sectors}, type={ZFS_PART_TYPE}, name=\"{label}\"\n"
 
 
 # ---------------------------------------------------------------- pool creation
@@ -984,6 +992,14 @@ def pair_disks(sizes: Sequence[int]) -> List[Tuple[int, int]]:
     """Index pairs for striped mirrors: largest with next largest, so sizes match."""
     order = sorted(range(len(sizes)), key=lambda i: -sizes[i])
     return [(order[i], order[i + 1]) for i in range(0, len(order) - 1, 2)]
+
+
+def mismatched_vdev_sizes(key: str, sizes: Sequence[int]) -> bool:
+    # OpenZFS allows up to 16 MiB of variation between members of a vdev.
+    tolerance = 16 * MIB
+    if key == "mirrors":
+        return any(abs(sizes[a] - sizes[b]) > tolerance for a, b in pair_disks(sizes))
+    return max(sizes) - min(sizes) > tolerance
 
 
 def capacity_estimate(key: str, sizes: Sequence[int]) -> int:

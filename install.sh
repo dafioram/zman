@@ -105,10 +105,12 @@ fi
 mv "$STAGE" "$LIB"
 
 LAUNCH=$(mktemp "$PREFIX/bin/.$APP-launcher.XXXXXX")
+LIB_ABS=$(cd "$LIB" && pwd -P)
+ENTRY=$(python3 -c 'import shlex, sys; print(shlex.quote(sys.argv[1]))' "$LIB_ABS/zman.py")
 cat > "$LAUNCH" <<EOF
 #!/bin/sh
 $TAG
-exec python3 $LIB/zman.py "\$@"
+exec python3 $ENTRY "\$@"
 EOF
 chmod 755 "$LAUNCH"
 mv "$LAUNCH" "$BIN"

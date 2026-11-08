@@ -95,6 +95,22 @@ def get_snapshot(name: str, runner: Runner = run) -> Optional[M.Snapshot]:
     return items[0] if items else None
 
 
+def list_bookmarks(dataset: str, runner: Runner = run) -> Tuple[List[Tuple[str, int, str]], str]:
+    r = runner(["zfs", "list", "-H", "-p", "-t", "bookmark", "-o", "name,createtxg,guid",
+                "-d", "1", dataset], timeout=_long())
+    if not r.ok:
+        return [], r.reason
+    bookmarks = []
+    for line in r.out.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 3 or "#" not in fields[0] or not all(x.isdecimal() for x in fields[1:]):
+            return [], "ZFS printed bookmark data zman could not read."
+        name, txg, guid = fields
+        if name.split("#", 1)[0] == dataset:
+            bookmarks.append((name, int(txg), guid))
+    return sorted(bookmarks), ""
+
+
 def holds(name: str, runner: Runner = run) -> List[str]:
     r = runner(["zfs", "holds", "-H", name])
     return M.parse_holds(r.out) if r.ok else []
@@ -107,7 +123,8 @@ def destroy_preview(target: str, recursive: bool = False, runner: Runner = run) 
     return names, reclaim, ("" if r.ok else r.reason)
 
 
-LSBLK_COLS = "NAME,KNAME,PATH,SIZE,TYPE,MODEL,SERIAL,ROTA,TRAN,FSTYPE,LABEL,MOUNTPOINT"
+LSBLK_COLS = ("NAME,KNAME,PATH,SIZE,TYPE,MODEL,SERIAL,ROTA,TRAN,FSTYPE,LABEL,MOUNTPOINTS,"
+              "LOG-SEC,UUID,PTTYPE,PTUUID,PARTTYPE,PARTUUID,MAJ:MIN,WWN")
 
 
 def kname_of(path: str) -> str:
@@ -153,7 +170,13 @@ def disk_inventory(runner: Runner = run) -> Tuple[List[M.Disk], Dict[str, M.Disk
     statuses, serr = pool_statuses(runner)
     members = M.pool_members(statuses, kname_of)
     uses = {d.name: M.disk_use(d, members) for d in disks}
-    return disks, uses, statuses, err or serr
+    err = err or serr
+    if not err and any(not status.vdevs for status in statuses.values()):
+        err = "Could not verify all pool devices."
+    if err:
+        uses = {name: M.DiskUse("use unverified", "warn", False) if use.free else use
+                for name, use in uses.items()}
+    return disks, uses, statuses, err
 
 
 def disk_for_path(path: str, disks: Sequence[M.Disk]) -> Tuple[Optional[M.Disk], Optional[M.Part]]:

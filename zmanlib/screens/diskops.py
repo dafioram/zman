@@ -6,7 +6,7 @@ import re
 import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .. import model as M
+from .. import model as M, zfs
 from ..runner import TARGET, run
 from ..textfmt import fmt_size
 from ..ui import paint
@@ -37,14 +37,21 @@ def partition_path(d: M.Disk, n: int = 1) -> str:
     return f"{d.path}{sep}{n}"
 
 
-def disk_fingerprint(d: M.Disk) -> Tuple[str, int, str, str]:
-    return (d.name, d.size, d.serial, d.by_id)
+def disk_identity(d: M.Disk) -> tuple:
+    return (d.name, d.path, d.size, d.serial, d.by_id, d.logical_sector,
+            d.raw.get("wwn"), d.raw.get("maj:min"))
+
+
+def disk_fingerprint(d: M.Disk) -> tuple:
+    parts = tuple(sorted((p.name, p.size, p.fstype, p.label, p.uuid, p.parttype, p.partuuid) for p in d.parts))
+    return (disk_identity(d), d.fstype, d.label, d.raw.get("uuid"), d.raw.get("pttype"), d.raw.get("ptuuid"), parts)
 
 
 def still_free(chosen: Sequence[M.Disk]) -> bool:
     """Re-check right before erasing: same disks, same identity, still free."""
-    from ..zfs import disk_inventory
-    disks, uses, _, _ = disk_inventory()
+    disks, uses, _, err = zfs.disk_inventory()
+    if err:
+        return False
     now = {d.name: d for d in disks}
     for d in chosen:
         cur = now.get(d.name)
@@ -53,10 +60,8 @@ def still_free(chosen: Sequence[M.Disk]) -> bool:
     return True
 
 
-def partition_steps(chosen: Sequence[M.Disk], size: int, label: str) -> List[Tuple[str, List[str]]]:
-    """The sfdisk commands (for showing); the script itself goes on stdin."""
-    return [(f"partition {d.name}", ["sfdisk", "--wipe", "always", "--wipe-partitions", "always", d.dev_path])
-            for d in chosen]
+def partition_command(d: M.Disk) -> List[str]:
+    return ["sfdisk", "--wipe", "always", "--wipe-partitions", "always", d.dev_path]
 
 
 def wait_for(path: str, seconds: float = 15) -> bool:
@@ -72,11 +77,16 @@ def partition_disks(chosen: Sequence[M.Disk], size: int, label: str) -> Tuple[Li
     """Give each disk one ZFS partition of `size` bytes. Returns (partition paths, error)."""
     if "sfdisk" not in TARGET.bins:
         return [], "sfdisk is not installed. Hint: apt install fdisk"
-    script = M.sfdisk_script(size, label)
+    for d in chosen:
+        sector = d.logical_sector
+        if sector <= 0 or M.MIB % sector or size % sector or not 0 < size <= d.size - 2 * M.MIB:
+            return [], f"Cannot fit the requested partition on {d.name} with its logical sector size."
     paths = []
     for d in chosen:
+        if not still_free([d]):
+            return paths, f"{d.name} changed or could not be verified before partitioning."
         print(paint(f"Partitioning {d.name} ({d.dev_path})...", "dim"))
-        r = run(["sfdisk", "--wipe", "always", "--wipe-partitions", "always", d.dev_path], input=script)
+        r = run(partition_command(d), input=M.sfdisk_script(size, label, d.logical_sector))
         if not r.ok:
             return paths, f"sfdisk on {d.name}: {r.reason}"
         paths.append(partition_path(d))
@@ -85,6 +95,15 @@ def partition_disks(chosen: Sequence[M.Disk], size: int, label: str) -> Tuple[Li
     for p in paths:
         if not wait_for(p):
             return paths, f"{p} did not appear after partitioning."
+    disks, uses, _, err = zfs.disk_inventory()
+    if err:
+        return paths, f"Cannot verify the new partitions: {err}"
+    for old, path in zip(chosen, paths):
+        disk, part = zfs.disk_for_path(path, disks)
+        if (disk is None or part is None or disk_identity(disk) != disk_identity(old)
+                or not uses[disk.name].free or disk.fstype or part.fstype or len(disk.parts) != 1
+                or part.number != 1 or part.size != size or part.parttype.upper() != M.ZFS_PART_TYPE):
+            return paths, f"Could not verify the new ZFS partition at {path}."
     return paths, ""
 
 

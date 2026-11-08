@@ -238,6 +238,9 @@ class Walk(unittest.TestCase):
         text = self.go(" ".join(nums))
         self.assertIn("New pool fast", text)
         self.assertIn("Capacity follows the smallest disk", text)
+        text = self.go("1")
+        self.assertIn("Disk sizes differ", text)
+        self.go("")
         text = self.go("2", "2")                          # leave headroom
         self.assertIn("leave headroom", text)
         self.assertIn("one partition of", text)
@@ -322,6 +325,8 @@ class Walk(unittest.TestCase):
         text = self.go(row.split()[0], "8")
         self.assertIn("Also destroys 1 newer snapshot", text)
         self.assertIn("daily-2026-10-27", text)
+        self.assertIn("Also destroys 1 newer bookmark", text)
+        self.assertIn("#replication", text)
         self.assertIn("Type home to roll back", text)
         text = self.go("home")
         self.assertIn("is back at @daily-2026-10-26", text)
@@ -516,6 +521,9 @@ class Walk(unittest.TestCase):
         text = self.go("6")
         self.assertIn("Prune snapshots (5 can be pruned)", text)
         text = self.go("1")
+        row = next(line for line in text.splitlines() if line.strip().endswith("tank"))
+        text = self.go(row.split()[0])
+        self.assertNotIn("backup/hosts", text)
         self.assertNotIn("manual-2026-10-01", text)       # held
         self.assertNotIn("before-upgrade", text)          # has a clone
         text = self.go("1-2")

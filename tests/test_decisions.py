@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,10 +16,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fixtures as F  # noqa: E402
 from zmanlib import app  # noqa: E402
 from zmanlib import model as M  # noqa: E402
+from zmanlib import zfs as Z  # noqa: E402
+from zmanlib.errors import Leave  # noqa: E402
+from zmanlib.ui import Msg  # noqa: E402
 from zmanlib.screens import datasets as DS  # noqa: E402
 from zmanlib.screens import devices as DV  # noqa: E402
 from zmanlib.screens import diskops as DO  # noqa: E402
 from zmanlib.screens import pools as PL  # noqa: E402
+from zmanlib.screens import snapshots as SS  # noqa: E402
 from zmanlib.screens import space as SP  # noqa: E402
 
 
@@ -140,6 +145,21 @@ class PoolDecisions(unittest.TestCase):
 
 
 class DiskDecisions(unittest.TestCase):
+    def test_unverified_pool_status_blocks_disk_selection(self) -> None:
+        disk = M.Disk("sdb", "/dev/sdb", size=4 * M.GIB, fstype="zfs_member")
+        with mock.patch.object(Z, "list_disks", return_value=([disk], "")), \
+                mock.patch.object(Z, "pool_statuses", return_value=({}, "status timed out")):
+            disks, uses, _, err = Z.disk_inventory()
+            self.assertEqual(err, "status timed out")
+            self.assertEqual(DO.free_disks(disks, uses), [])
+            self.assertFalse(DO.still_free([disk]))
+
+    def test_new_signature_invalidates_disk_confirmation(self) -> None:
+        disk = M.Disk("sdb", "/dev/sdb", size=4 * M.GIB)
+        current = replace(disk, fstype="zfs_member", label="tank")
+        with mock.patch.object(Z, "disk_inventory", return_value=([current], {"sdb": M.disk_use(current, {})}, {}, "")):
+            self.assertFalse(DO.still_free([disk]))
+
     def test_free_disks_largest_first(self) -> None:
         disks, _ = M.parse_lsblk(F.LSBLK)
         uses = {d.name: M.disk_use(d, {"sdb1": ("tank", "ONLINE")}) for d in disks}
@@ -171,6 +191,37 @@ class DiskDecisions(unittest.TestCase):
             need, part = DO.size_need(st, a, [disk])
         self.assertIsNone(part)
         self.assertEqual(need, 900 * 10 ** 9)
+
+
+class DestructiveRechecks(unittest.TestCase):
+    def test_recursive_destroy_stops_on_failed_recheck_or_new_guid(self) -> None:
+        ds = M.Dataset("tank/data", "filesystem", guid="100")
+        child = M.Dataset("tank/data/child", "filesystem", guid="200")
+        names = [ds.name, child.name]
+        for error in ("dry run failed", ""):
+            with self.subTest(error=error), mock.patch.multiple(
+                Z, list_snapshots=mock.Mock(return_value=([], "")),
+                destroy_preview=mock.Mock(side_effect=[(names, None, ""), (names, None, error)]),
+                list_datasets=mock.Mock(side_effect=[([ds, child], ""), ([ds, replace(child, guid="300")], "")]),
+            ), mock.patch.multiple(DS, preview=mock.Mock(), typed_confirm=mock.Mock(return_value=True), run=mock.Mock()):
+                if error:
+                    with self.assertRaisesRegex(Leave, "Cannot recheck destroy"):
+                        DS.destroy_flow(Msg(), ds)
+                else:
+                    DS.destroy_flow(Msg(), ds)
+                DS.run.assert_not_called()
+
+    def test_rollback_stops_when_target_or_bookmark_changes(self) -> None:
+        target = M.Snapshot("tank/data@base", txg=100, guid="100")
+        mark = ("tank/data#replicate", 200, "200")
+        for current, marks in ((replace(target, guid="101"), [mark]), (target, [])):
+            with self.subTest(current=current, marks=marks), mock.patch.multiple(
+                Z, list_snapshots=mock.Mock(side_effect=[([target], ""), ([current], "")]),
+                list_bookmarks=mock.Mock(side_effect=[([mark], ""), (marks, "")]),
+            ), mock.patch.multiple(SS, preview=mock.Mock(), typed_confirm=mock.Mock(return_value=True), run=mock.Mock()):
+                SS.rollback_flow(Msg(), target, None)
+                self.assertEqual(SS.preview.call_args.args[2], [["zfs", "rollback", "-r", target.name]])
+                SS.run.assert_not_called()
 
 
 class Pruning(unittest.TestCase):

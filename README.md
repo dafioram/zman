@@ -91,8 +91,9 @@ From there:
   asks for the passphrase itself.
 - **Disks of different sizes.** A mirror or RAIDZ is as big as its smallest
   disk. Choose either:
-  - *Whole disks* (default): ZFS partitions each disk. With `autoexpand=on` the
-    pool grows once the smaller disks are replaced with bigger ones.
+  - *Whole disks* (default): ZFS partitions each disk. Use matching disks within
+    each mirror or RAIDZ group. Choose Leave headroom for mismatched disks.
+    With `autoexpand=on`, whole-disk vdevs can grow after disk replacement.
   - *Leave headroom*: zman gives every disk one GPT partition a little below the
     smallest disk (0.5%, at least 1 GiB), so a future replacement that is a few MB
     smaller still fits. zman then gives replacements the same partition size.
@@ -133,7 +134,8 @@ name, with its partitions in the disk's view.
 
 **Space & cleanup.** Space per pool split into data, snapshots and reservations,
 the datasets whose snapshots hold the most, space by dataset, and **Prune
-snapshots**.
+snapshots**. Pruning works within one selected pool and shows the full deletion
+plan before confirmation.
 
 **System info.** zman and ZFS versions (including a warning when the tools and
 the kernel module differ), ARC cache size and hit rate, the scheduled scrub job

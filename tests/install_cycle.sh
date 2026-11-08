@@ -6,7 +6,7 @@ set -eu
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-export ZMAN_PREFIX="$WORK/prefix" ZMAN_CONF_DIR="$WORK/etc/zman"
+export ZMAN_PREFIX="$WORK/prefix with spaces" ZMAN_CONF_DIR="$WORK/etc/zman"
 export PYTHONDONTWRITEBYTECODE=1
 
 fail() { echo "FAIL: $*" >&2; exit 1; }

@@ -740,9 +740,22 @@ def destroy_blockers(ds: M.Dataset, snaps: Sequence[M.Snapshot]) -> List[str]:
     return out
 
 
+def _destroy_identity(ds: M.Dataset, names: Sequence[str], snaps: Sequence[M.Snapshot]) -> Dict[str, str]:
+    datasets, err = zfs.list_datasets(root=ds.name)
+    if err:
+        raise Leave(f"Cannot verify datasets to destroy: {err}", "bad")
+    identities = {item.name: item.guid for item in datasets}
+    identities.update((snap.name, snap.guid) for snap in snaps)
+    if (not ds.guid or identities.get(ds.name) != ds.guid or set(names) != identities.keys()
+            or not all(guid.isdecimal() for guid in identities.values())):
+        raise Leave("Could not verify every object in the destroy preview. Refresh and review again.", "warn")
+    return identities
+
+
 def destroy_flow(msg: Msg, ds: M.Dataset) -> None:
-    snaps, _ = zfs.list_snapshots(dataset=ds.name, recursive=True)
-    names, _, err = zfs.destroy_preview(ds.name, recursive=True)
+    snaps, err = zfs.list_snapshots(dataset=ds.name, recursive=True)
+    if err:
+        raise Leave(f"Cannot verify snapshots to destroy: {err}", "bad")
     blockers = destroy_blockers(ds, snaps)
     kind = "volume" if ds.is_volume else "dataset"
     if blockers:
@@ -751,6 +764,10 @@ def destroy_flow(msg: Msg, ds: M.Dataset) -> None:
                 + ["", ("Release the holds, or destroy or promote the clones, first.", "dim")])
         wait_enter()
         raise Cancel()
+    names, _, err = zfs.destroy_preview(ds.name, recursive=True)
+    if err:
+        raise Leave(f"Cannot preview destroy: {err}", "bad")
+    identities = _destroy_identity(ds, names, snaps)
     sub = [n for n in names if "@" not in n and n != ds.name]
     nsnap = len([n for n in names if "@" in n])
     args = ["zfs", "destroy"] + (["-r"] if (sub or nsnap) else []) + [ds.name]
@@ -762,15 +779,17 @@ def destroy_flow(msg: Msg, ds: M.Dataset) -> None:
         lines.append(f"  ... and {len(sub) - 8} more")
     if ds.mounted:
         lines.append(("It is unmounted first; programs and shares using it must close it.", "warn"))
-    if err:
-        lines.append((f"ZFS said: {err}", "warn"))
     lines.append(("This cannot be undone.", "bad"))
     preview(f"Destroy {kind} {ds.name}", lines, [args])
     if not typed_confirm(ds.leaf, f"destroy {ds.name} and its data"):
         raise Cancel()
-    names2, _, _ = zfs.destroy_preview(ds.name, recursive=True)
-    snaps2, _ = zfs.list_snapshots(dataset=ds.name, recursive=True)
-    if sorted(names2) != sorted(names) or destroy_blockers(ds, snaps2):
+    names2, _, err = zfs.destroy_preview(ds.name, recursive=True)
+    if err:
+        raise Leave(f"Cannot recheck destroy: {err}", "bad")
+    snaps2, err = zfs.list_snapshots(dataset=ds.name, recursive=True)
+    if err:
+        raise Leave(f"Cannot recheck snapshots to destroy: {err}", "bad")
+    if _destroy_identity(ds, names2, snaps2) != identities or destroy_blockers(ds, snaps2):
         changed(msg, ds.name, "destroyed")
         return
     report(msg, run(args, timeout=CONFIG.long_timeout), f"Removed {kind} {ds.name}")

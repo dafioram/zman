@@ -60,6 +60,7 @@ def build(root: str) -> dict:
               parts=_zparts("sdl", 2 * TB, "oldpool")),
         _disk("sdm", 3500 * GB, "HGST HDN724040", "PK1SMALLER", "ata-HGST_HDN724040ALE640_PK1SMALLER"),
     ]
+    next(d for d in disks if d["name"] == "sdm")["logical_sector"] = 4096
     for i, d in enumerate(disks):
         open(os.path.join(root, "dev", d["name"]), "w").close()
         link = os.path.join(root, "by-id", d["by_id"])
@@ -160,6 +161,7 @@ def build(root: str) -> dict:
             "backup/hosts@weekly-1": {"used": 20 * GB, "refer": 1100 * GB, "creation": now - 7 * day,
                                       "txg": 4400, "guid": "8000000000000000007", "holds": []},
         },
+        "bookmarks": {"tank/home#replication": {"createtxg": 4900, "guid": "8000000000000000004"}},
         "importable": [{"name": "archive", "id": "12345678901234567890", "state": "ONLINE", "foreign": True,
                         "saved": {"pool": {"name": "archive", "guid": "12345678901234567890", "size": 1990 * GB,
                                            "props": {"ashift": ["12", "local"]},

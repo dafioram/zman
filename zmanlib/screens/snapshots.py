@@ -243,10 +243,15 @@ def rename_flow(msg: Msg, s: M.Snapshot) -> str:
 
 
 def rollback_flow(msg: Msg, s: M.Snapshot, ds: Optional[M.Dataset]) -> None:
-    snaps, _ = zfs.list_snapshots(dataset=s.dataset)
+    snaps, err = zfs.list_snapshots(dataset=s.dataset)
+    if err:
+        raise Leave(f"Cannot verify snapshots for rollback: {err}", "bad")
     target = next((x for x in snaps if x.name == s.name), None)
     if target is None:
         raise Gone("snapshot")
+    if not s.guid or target.guid != s.guid:
+        changed(msg, s.name, "rolled back")
+        return
     newer, blockers = M.rollback_plan(target, snaps)
     if blockers:
         preview(f"Roll back {s.dataset}", [("zman will not roll back, because newer snapshots would be destroyed:", "bad")]
@@ -255,7 +260,11 @@ def rollback_flow(msg: Msg, s: M.Snapshot, ds: Optional[M.Dataset]) -> None:
                    ("the snapshot instead.", "dim")])
         wait_enter()
         raise Cancel()
-    args = ["zfs", "rollback"] + (["-r"] if newer else []) + [s.name]
+    bookmarks, err = zfs.list_bookmarks(s.dataset)
+    if err:
+        raise Leave(f"Cannot verify bookmarks for rollback: {err}", "bad")
+    newer_bookmarks = [b for b in bookmarks if b[1] > target.txg]
+    args = ["zfs", "rollback"] + (["-r"] if newer or newer_bookmarks else []) + [s.name]
     lines: List[object] = [(f"Discards every change made to {s.dataset} since {fmt_time(s.creation)}.", "bad")]
     if newer:
         lines.append((f"Also destroys {plural(len(newer), 'newer snapshot')}:", "bad"))
@@ -263,6 +272,12 @@ def rollback_flow(msg: Msg, s: M.Snapshot, ds: Optional[M.Dataset]) -> None:
             lines.append(f"  @{x.short}  {fmt_size(x.used)}  {fmt_ago(x.creation)}")
         if len(newer) > 10:
             lines.append(f"  ... and {len(newer) - 10} more")
+    if newer_bookmarks:
+        lines.append((f"Also destroys {plural(len(newer_bookmarks), 'newer bookmark')}:", "bad"))
+        lines.extend(f"  #{name.split('#', 1)[1]}" for name, _, _ in newer_bookmarks[:10])
+        if len(newer_bookmarks) > 10:
+            lines.append(f"  ... and {len(newer_bookmarks) - 10} more")
+    if newer or newer_bookmarks:
         lines.append(("A snapshot you take now would be newer too, so the rollback would destroy it.", "dim"))
         lines.append(("To keep the current state as well, use Clone to new dataset instead.", "dim"))
     if ds is not None and ds.is_volume:
@@ -274,13 +289,19 @@ def rollback_flow(msg: Msg, s: M.Snapshot, ds: Optional[M.Dataset]) -> None:
     preview(f"Roll back {s.dataset} to @{s.short}", lines, [args])
     if not typed_confirm(leaf, "roll back"):
         raise Cancel()
-    snaps2, _ = zfs.list_snapshots(dataset=s.dataset)
+    snaps2, err = zfs.list_snapshots(dataset=s.dataset)
+    if err:
+        raise Leave(f"Cannot recheck snapshots for rollback: {err}", "bad")
     t2 = next((x for x in snaps2 if x.name == s.name), None)
-    if t2 is None:
+    if t2 is None or t2.guid != target.guid or t2.txg != target.txg:
         changed(msg, s.name, "rolled back")
         return
     newer2, blockers2 = M.rollback_plan(t2, snaps2)
-    if blockers2 or [x.fingerprint() for x in newer2] != [x.fingerprint() for x in newer]:
+    bookmarks2, err = zfs.list_bookmarks(s.dataset)
+    if err:
+        raise Leave(f"Cannot recheck bookmarks for rollback: {err}", "bad")
+    if (blockers2 or [x.fingerprint() for x in newer2] != [x.fingerprint() for x in newer]
+            or [b for b in bookmarks2 if b[1] > t2.txg] != newer_bookmarks):
         changed(msg, s.dataset, "rolled back")
         return
     report(msg, run(args, timeout=CONFIG.long_timeout), f"Done. {s.dataset} is back at @{s.short}.")

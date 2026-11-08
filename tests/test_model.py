@@ -287,10 +287,18 @@ class Creation(unittest.TestCase):
         part = M.headroom_size(sizes)
         self.assertLess(part, min(sizes) - M.GIB)
         self.assertEqual(part % M.MIB, 0)
-        script = M.sfdisk_script(part, "zfs-tank")
-        self.assertIn("label: gpt", script)
-        self.assertIn(f"size={part // 512}", script)
-        self.assertIn(M.ZFS_PART_TYPE, script)
+        for sector in (512, 4096):
+            script = M.sfdisk_script(part, "zfs-tank", sector)
+            self.assertIn("label: gpt", script)
+            self.assertIn(f"start={M.MIB // sector}, size={part // sector},", script)
+            self.assertIn(M.ZFS_PART_TYPE, script)
+
+    def test_mismatched_sizes_within_a_vdev(self) -> None:
+        gib = M.GIB
+        self.assertTrue(M.mismatched_vdev_sizes("mirror", [4 * gib, 3 * gib]))
+        self.assertFalse(M.mismatched_vdev_sizes("raidz1", [gib, gib + M.MIB, gib + 16 * M.MIB]))
+        self.assertFalse(M.mismatched_vdev_sizes("mirrors", [4 * gib, 2 * gib, 4 * gib, 2 * gib]))
+        self.assertTrue(M.mismatched_vdev_sizes("mirrors", [4 * gib, 3 * gib, 2 * gib, 2 * gib]))
 
     def test_create_args(self) -> None:
         o = M.CreateOpts(compression="zstd", encryption=True, mountpoint="/srv/tank")

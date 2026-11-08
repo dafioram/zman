@@ -16,7 +16,7 @@ from ..ui import (Col, Extra, Fetched, ListView, Msg, Opt, Sort, ask_text, choos
                   show_text, typed_confirm, wait_enter)
 from . import helptext
 from .common import CANCELLED, attached, changed, leave_if_done, quick, report
-from .diskops import disk_line, free_disks, partition_disks, partition_steps, still_free
+from .diskops import disk_line, free_disks, partition_command, partition_disks, partition_path, still_free
 
 
 # ---------------------------------------------------------------- list
@@ -347,6 +347,9 @@ def add_spare_flow(msg: Msg, name: str) -> None:
     if pool is None:
         raise Gone("pool")
     disks, uses, _, err = zfs.disk_inventory()
+    if err:
+        msg.bad(f"Cannot verify disk inventory: {err}")
+        return
     st = pool.status or M.PoolStatus(name=name)
     min_size = 0
     for v in st.leaves():
@@ -630,12 +633,18 @@ def ask_pool_name(existing: Sequence[str]) -> str:
 
 
 def create_pool_flow(msg: Msg) -> None:
-    disks, uses, statuses, err = zfs.disk_inventory()
+    disks, uses, _, err = zfs.disk_inventory()
+    if err:
+        msg.bad(f"Cannot verify disk inventory: {err}")
+        return
     free = free_disks(disks, uses)
     if not free:
         msg.warn("No free disks. A disk must not be mounted, in a pool, or used by LVM, RAID or swap.")
         return
-    pools, _ = zfs.list_pools()
+    pools, err = zfs.list_pools()
+    if err:
+        msg.bad(f"Cannot verify pool names: {err}")
+        return
     emit([paint("Create a pool", "title"), "",
           f"Free disks: {', '.join(d.name for d in free)}",
           paint("Names use letters, digits and _ . : - and start with a letter. Ctrl-C cancels.", "dim"), ""])
@@ -738,9 +747,16 @@ def create_setup(msg: Msg, name: str, layout: M.Layout, chosen: List[M.Disk], us
 def run_create(msg: Msg, name: str, layout: M.Layout, chosen: List[M.Disk], uses: Dict[str, M.DiskUse],
                o: M.CreateOpts) -> bool:
     sizes = [d.size for d in chosen]
+    if not o.headroom and M.mismatched_vdev_sizes(layout.key, sizes):
+        preview("Disk sizes differ", [
+            "OpenZFS rejects different sizes in the same mirror or RAIDZ vdev.",
+            "Choose Leave headroom to make equal-sized partitions, or select matching disks.",
+        ])
+        wait_enter()
+        return False
     warned = [d for d in chosen if uses[d.name].warn]
     part = M.headroom_size(sizes) if o.headroom else 0
-    devs = [f"{d.by_id}-part1" if d.by_id else d.path + "1" for d in chosen] if o.headroom else [d.dev_path for d in chosen]
+    devs = [partition_path(d) if o.headroom else d.dev_path for d in chosen]
     args = M.create_args(name, layout.key, devs, sizes, o, force=bool(warned) or o.headroom)
     lines: List[object] = [("These disks will be erased:", "bad")]
     for d in chosen:
@@ -752,7 +768,7 @@ def run_create(msg: Msg, name: str, layout: M.Layout, chosen: List[M.Disk], uses
                  f"{fmt_size(M.capacity_estimate(layout.key, [part] * len(sizes) if part else sizes))}.")
     if o.encryption:
         lines.append(("zpool will ask for the new passphrase twice.", "warn"))
-    cmds = [a for _, a in partition_steps(chosen, part, f"zfs-{name}")] if o.headroom else []
+    cmds = [partition_command(d) for d in chosen] if o.headroom else []
     preview(f"Create pool {name}", lines, cmds + [args])
     if not typed_confirm(name, "erase these disks and create the pool"):
         msg.warn(CANCELLED)
@@ -762,8 +778,8 @@ def run_create(msg: Msg, name: str, layout: M.Layout, chosen: List[M.Disk], uses
         if not typed_confirm("erase", "wipe them anyway"):
             msg.warn(CANCELLED)
             return True
-    pools, _ = zfs.list_pools()
-    if any(p.name == name for p in pools) or not still_free(chosen):
+    pools, err = zfs.list_pools()
+    if err or any(p.name == name for p in pools) or not still_free(chosen):
         changed(msg, "The disks or pool names", "created")
         return True
     if o.headroom:

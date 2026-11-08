@@ -14,7 +14,8 @@ from ..ui import (Col, Fetched, ListView, Msg, Opt, Sort, choose, confirm, item_
                   preview, typed_confirm)
 from . import helptext
 from .common import changed, leave_if_done, quick, report
-from .diskops import disk_line, free_disks, partition_disks, partition_steps, size_need, still_free
+from .diskops import (disk_fingerprint, disk_line, free_disks, partition_command, partition_disks,
+                      partition_path, size_need, still_free)
 
 
 def _key(v: M.Vdev) -> str:
@@ -193,7 +194,9 @@ def _same(pool: str, key: str, v: M.Vdev) -> bool:
 
 
 def _pick_new_disk(title: str, need: int, part_size: Optional[int], explain: Sequence[str]) -> Tuple[M.Disk, M.DiskUse]:
-    disks, uses, _, _ = zfs.disk_inventory()
+    disks, uses, _, err = zfs.disk_inventory()
+    if err:
+        raise Leave(f"Cannot verify disk inventory: {err}", "warn")
     free = free_disks(disks, uses)
     big = [d for d in free if d.size >= need]
     small = [d for d in free if d.size < need]
@@ -219,6 +222,7 @@ def _prepare_and_run(msg: Msg, d: M.Disk, part_size: Optional[int], label: str,
         paths, err = partition_disks([d], part_size, label)
         if err:
             msg.bad(f"Failed: {err}")
+            msg.add(f"{d.name} may have been repartitioned.", "dim")
             return False
         dev = paths[0]
     else:
@@ -238,8 +242,8 @@ def replace_flow(msg: Msg, pool: str, key: str) -> None:
     def make(dev: str) -> List[str]:
         return ["zpool", "replace"] + (["-f"] if force else []) + [pool, _key(v), dev]
 
-    shown_dev = (new.by_id + "-part1" if new.by_id else new.path + "1") if part_size else new.dev_path
-    cmds = [a for _, a in partition_steps([new], part_size or 0, f"zfs-{pool}")] if part_size else []
+    shown_dev = partition_path(new) if part_size else new.dev_path
+    cmds = [partition_command(new)] if part_size else []
     lines: List[object] = [
         f"Old: {v.label} ({v.state})",
         f"New: {new.name}  {fmt_size(new.size)}  {new.describe() or new.media}",
@@ -263,7 +267,10 @@ def replace_flow(msg: Msg, pool: str, key: str) -> None:
 
 def replace_in_place_flow(msg: Msg, pool: str, key: str) -> None:
     p, st, v = _load(pool, key)
-    disks, uses, _, _ = zfs.disk_inventory()
+    disks, _, _, err = zfs.disk_inventory()
+    if err:
+        msg.bad(f"Cannot verify disk inventory: {err}")
+        return
     d, _part = zfs.disk_for_path(v.path, disks)
     if d is None:
         msg.warn(f"Nothing is at {v.path} right now.")
@@ -276,7 +283,9 @@ def replace_in_place_flow(msg: Msg, pool: str, key: str) -> None:
     ], [args])
     if not typed_confirm(d.name, "erase it and resilver onto it"):
         raise Cancel()
-    if not _same(pool, key, v):
+    disks, _, _, err = zfs.disk_inventory()
+    current, _ = zfs.disk_for_path(v.path, disks)
+    if err or current is None or disk_fingerprint(current) != disk_fingerprint(d) or not _same(pool, key, v):
         changed(msg, v.label, "replaced")
         return
     if report(msg, run(args, timeout=CONFIG.long_timeout), "Resilver started."):
@@ -327,8 +336,8 @@ def attach_flow(msg: Msg, pool: str, key: str) -> None:
 
     parent = st.vdevs[v.parent]
     after = "a 2-way mirror" if parent.kind == "pool" else f"a {len(st.children(parent.idx)) + 1}-way mirror"
-    shown_dev = (new.by_id + "-part1" if new.by_id else new.path + "1") if part_size else new.dev_path
-    cmds = [a for _, a in partition_steps([new], part_size or 0, f"zfs-{pool}")] if part_size else []
+    shown_dev = partition_path(new) if part_size else new.dev_path
+    cmds = [partition_command(new)] if part_size else []
     lines: List[object] = [
         f"Adds {new.name} ({fmt_size(new.size)}, {new.describe() or new.media}) as a mirror of {v.label}.",
         f"That part of the pool becomes {after}. ZFS copies (resilvers) the data onto it.",

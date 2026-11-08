@@ -229,8 +229,14 @@ class RealZfs(unittest.TestCase):
         newer, blockers = M.rollback_plan(target, a_snaps)
         self.assertEqual([s.short for s in newer], ["multi"])
         self.assertEqual(blockers, [])
+        bookmark = f"{p}/a#multi"
+        sh("zfs", "bookmark", f"{p}/a@multi", bookmark)
+        marks, err = Z.list_bookmarks(f"{p}/a")
+        self.assertEqual(err, "")
+        self.assertEqual([name for name, _, _ in marks], [bookmark])
         sh("zfs", "rollback", "-r", target.name)
         self.assertIsNone(Z.get_snapshot(f"{p}/a@multi"))
+        self.assertEqual(Z.list_bookmarks(f"{p}/a"), ([], ""))
         sh("zfs", "destroy", f"{p}/small@multi")
         self.assertEqual(Z.list_snapshots(dataset=f"{p}/small")[0], [])
 

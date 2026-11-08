@@ -9,10 +9,10 @@ from .. import zfs
 from ..config import CONFIG
 from ..runner import run
 from ..textfmt import fmt_ago, fmt_size, plural, strip_ctl
-from ..ui import (Col, Fetched, ListView, Msg, Opt, Sort, menu, nav, paint, pick_candidates, preview,
-                  typed_confirm)
+from ..ui import (Col, Fetched, ListView, Msg, Opt, Sort, choose, menu, nav, paint, pick_candidates, preview,
+                  show_text, term_size, typed_confirm, wrap_value)
 from . import helptext
-from .common import CANCELLED, changed
+from .common import CANCELLED, changed, cmd_text
 
 CHUNK = 100
 
@@ -95,7 +95,18 @@ def destroy_commands(snaps: Sequence[M.Snapshot]) -> List[List[str]]:
 
 
 def prune_flow(msg: Msg) -> None:
-    snaps, err = zfs.list_snapshots()
+    pools, err = zfs.list_pools()
+    if err:
+        msg.bad(f"Failed: {err}")
+        return
+    if not pools:
+        msg.warn("No pools to clean up.")
+        return
+    index = choose("Select a pool to prune", [p.name for p in pools])
+    if index is None:
+        return
+    pool = pools[index].name
+    snaps, err = zfs.list_snapshots(dataset=pool, recursive=True)
     if err:
         msg.bad(f"Failed: {err}")
         return
@@ -105,7 +116,7 @@ def prune_flow(msg: Msg) -> None:
         return
     w = min(50, max(len(s.name) for s in cands))
     lines = [f"{s.name:<{w}}  {fmt_size(s.used):>7}  {fmt_ago(s.creation):>8}" for s in cands]
-    picked = pick_candidates("Prune snapshots", lines, [
+    picked = pick_candidates(f"Prune snapshots in {pool}", lines, [
         "Largest first. Held snapshots and snapshots with clones are not listed.",
         "Used is what each frees alone; destroying several can free more. Pick e.g. 1 3-5.",
     ])
@@ -114,8 +125,12 @@ def prune_flow(msg: Msg) -> None:
     print(paint("Working out how much space this frees...", "dim"))
     total = 0
     known = True
-    for c in cmds:
-        _, reclaim, _ = zfs.destroy_preview(c[-1])
+    batches = _cmd_groups(chosen)
+    for c, (_, items) in zip(cmds, batches):
+        names, reclaim, err = zfs.destroy_preview(c[-1])
+        if err or set(names) != {s.name for s in items}:
+            msg.bad(f"Cannot verify what {c[-1]} would destroy." + (f" ZFS said: {err}" if err else ""))
+            return
         if reclaim is None:
             known = False
         else:
@@ -126,20 +141,22 @@ def prune_flow(msg: Msg) -> None:
         f"Frees about {fmt_size(total)}." if known else "ZFS did not say how much space this frees.",
         ("The datasets' current files are not touched. This cannot be undone.", "dim"), "",
     ]
-    for ds, items in list(groups.items())[:8]:
-        lines_out.append(f"  {ds}: " + ", ".join("@" + s.short for s in items[:4]) +
-                         (f" and {len(items) - 4} more" if len(items) > 4 else ""))
-    if len(groups) > 8:
-        lines_out.append(f"  ... and {len(groups) - 8} more datasets")
-    shown = cmds[:3]
-    preview("Prune snapshots", lines_out, shown)
-    if len(cmds) > 3:
-        print(paint(f"... and {len(cmds) - 3} more commands like these", "dim"))
+    targets = [f"  {s.name}" for s in chosen]
+    width, height = term_size()
+    if sum(len(wrap_value(line, width)) for line in lines_out + targets) + len(cmds) + 5 < height and all(
+            len(cmd_text(c)) + len("Command: ") <= width for c in cmds):
+        preview("Prune snapshots", lines_out + targets, cmds)
+    else:
+        show_text("\n".join(targets + [""] + [cmd_text(c) for c in cmds]), f"Full prune plan for {pool}")
+        preview("Prune snapshots", lines_out)
     n = str(len(chosen))
     if not typed_confirm(n, f"destroy {n} snapshots"):
         msg.warn(CANCELLED)
         return
-    again, _ = zfs.list_snapshots()
+    again, err = zfs.list_snapshots(dataset=pool, recursive=True)
+    if err:
+        msg.bad(f"Cannot recheck snapshots to prune: {err}")
+        return
     now = {s.name: s for s in again}
     for s in chosen:
         cur = now.get(s.name)
@@ -148,7 +165,7 @@ def prune_flow(msg: Msg) -> None:
             return
     removed = 0
     failures: List[str] = []
-    for c, (ds, items) in zip(cmds, _cmd_groups(chosen)):
+    for c, (ds, items) in zip(cmds, batches):
         print(paint(f"Destroying {plural(len(items), 'snapshot')} of {ds}...", "dim"))
         r = run(c, timeout=CONFIG.long_timeout)
         if r.ok:
